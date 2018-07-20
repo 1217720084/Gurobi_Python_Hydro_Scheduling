@@ -250,7 +250,7 @@ slopes = pd.DataFrame( columns = ['week','reservoir','iter','value'])
 intercepts = pd.DataFrame( columns = ['week','iter','value'])
 
 
-for s in range(1,11):
+for s in scenario:
 
     endstorage = reservoir_initial
     storedstartstorage = dict()
@@ -514,10 +514,11 @@ for s in range(1,11):
     """ BACKWARD SOLVE """
 #    """ 
     sce = scenario[0:s]
+    sce = [s]
     for w in weekr:
         
         #  Set model parameters
-        inflow = sampledinflow[ (sampledinflow['scenario'] <= s) \
+        inflow = sampledinflow[ (sampledinflow['scenario'] == s) \
                               & (sampledinflow['week'] == w)]
         inflow = inflow.set_index(['scenario','lake'])
         inflow = dict(inflow['inflow'])
