@@ -207,11 +207,14 @@ del(dm,fx)
 
 
 # Get inflow data
-historicalinflow = pd.melt(inflow,id_vars = ['scenario','week'],
-                           var_name = 'lake',value_name = 'inflow')
-
 sampledinflow = pd.melt(sampledinflow,id_vars = ['scenario','week'],
                         var_name = 'lake',value_name = 'inflow')
+
+historicalinflow = pd.melt(inflow,id_vars = ['scenario','week'],
+                           var_name = 'lake',value_name = 'inflow')
+sce = range(1997,2017)                           
+historicalinflow = historicalinflow[(historicalinflow['scenario'].isin(sce))]                         
+
 
 # Get block hour data
 blockhour = pd.melt(blockhour,id_vars = ['week'],
@@ -249,7 +252,7 @@ minflowcost = 500
 slopes = pd.DataFrame( columns = ['week','reservoir','iter','value'])
 intercepts = pd.DataFrame( columns = ['week','iter','value'])
 
-
+scenario = scenario[0:100]
 for s in scenario:
 
     endstorage = reservoir_initial
@@ -513,13 +516,10 @@ for s in scenario:
 
     """ BACKWARD SOLVE """
 #    """ 
-    sce = scenario[0:s]
-    sce = [s]
     for w in weekr:
         
         #  Set model parameters
-        inflow = sampledinflow[ (sampledinflow['scenario'] == s) \
-                              & (sampledinflow['week'] == w)]
+        inflow = historicalinflow[ (sampledinflow['week'] == w)]
         inflow = inflow.set_index(['scenario','lake'])
         inflow = dict(inflow['inflow'])
         

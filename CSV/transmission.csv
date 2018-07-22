@@ -1,0 +1,5 @@
+frnode,tonode,capacity
+NI,HY,1000
+HY,NI,1000
+HY,SI,900
+SI,HY,900
