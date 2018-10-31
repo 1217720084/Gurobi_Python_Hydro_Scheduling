@@ -1,6 +1,6 @@
-% Thermal station data,,,,,
-% Heat rate in GJ/MWh,,,,,
-generator,node,fuel,heatrate,capacity,operationcost
+% Thermal station data
+% Heat rate in GJ/MWh
+generator,node,fuel,capacity,heatrate,operationcost
 Huntly_U6,NI,gas,43.2,12.5,0
 Huntly_U5,NI,gas,346.5,8.5,0
 TCC,NI,gas,339.3,8.3,0

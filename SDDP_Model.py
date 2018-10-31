@@ -7,13 +7,13 @@ Created on Thu Jul 05 17:18:21 2018
 import pandas as pd
 import numpy as np
 import gurobipy as grb
-
+import time 
 
 """
 Geting data from csv files and prepare inputs for the model
 """
 
-csvinput  = r'C:\Security Margin\Development\Gurobi\CSV'
+csvinput  = r'C:\Security Margin\Development\Hydro_Scheduling_Model_Gurobi\CSV'
 
 hydroarc  = pd.read_csv(csvinput + '\\hydroarc.csv',
                         comment = '%', sep = ',', header = 'infer')
@@ -252,12 +252,12 @@ minflowcost = 500
 slopes = pd.DataFrame( columns = ['week','reservoir','iter','value'])
 intercepts = pd.DataFrame( columns = ['week','iter','value'])
 
-scenario = scenario[0:100]
+scenario = scenario[0:1]
 for s in scenario:
 
     endstorage = reservoir_initial
     storedstartstorage = dict()
-
+    tick = time.time()
     """ FORWARD SOLVE """
     for w in week:
 
@@ -284,6 +284,7 @@ for s in scenario:
         
         # Create optimization model
         m = grb.Model('HydroScheduling')
+        m.setParam( 'OutputFlag', False )
 
 
         # Create variables ####################################################
@@ -511,17 +512,26 @@ for s in scenario:
         endstorage = m.getAttr('X', ENDSTORAGE)
 
     """ FORWARD SOLVE END """
+    
+    tock = time.time()
+    elapsed = tock - tick
+    print('foreward solve time: ')
+    print(elapsed)
 
 
 
     """ BACKWARD SOLVE """
+
 #    """ 
     for w in weekr:
         
         #  Set model parameters
         inflow = historicalinflow[ (sampledinflow['week'] == w)]
+        
         inflow = inflow.set_index(['scenario','lake'])
         inflow = dict(inflow['inflow'])
+        
+        
         
         if w < week[-1]:
             slope = slopes[slopes['week']==w].set_index(['reservoir','iter'])
@@ -535,6 +545,7 @@ for s in scenario:
 
         # Create optimization model
         m = grb.Model('HydroScheduling')
+        m.setParam( 'OutputFlag', False )
 
 
         # Create variables ####################################################
@@ -802,7 +813,10 @@ for s in scenario:
         intercepts = intercepts.append({'week':w-1,'iter':s,'value':b},
                                         ignore_index=True)
 
-
+    tick = time.time()
+    elapsed = tick - tock
+    print('backward solve time: ')
+    print(elapsed)
 
 #    """
 
