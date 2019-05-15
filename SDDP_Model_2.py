@@ -8,11 +8,16 @@ import pandas as pd
 import numpy as np
 import gurobipy as grb
 import time 
+import os
+
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+
 
 """
 Geting data from csv files and prepare inputs for the model
 """
-start = time.time()
+
 
 csvinput  = r'C:\Security Margin\Development\Hydro_Scheduling_Model_Gurobi\CSV'
 
@@ -86,7 +91,7 @@ if 'week' in node: node.remove('week')
 if 'block' in node: node.remove('block')
 
 
-# Creating generator lists and generatornode tuplelist
+# Creating generator lists and gen_node tuplelist
 df = thermalplant[['generator','node','capacity']] \
     .append(hydroplant[['generator','node','capacity']]) \
     .drop_duplicates().set_index(['generator'])
@@ -96,7 +101,7 @@ generatorthermal = thermalplant['generator'].tolist()
 generatorhydro = hydroplant['generator'].tolist()
 gen_capacity = dict(df['capacity'])
 df = df.reset_index().set_index(['generator','node'])
-generatornode = grb.tuplelist(df.index.tolist())
+gen_node = grb.tuplelist(df.index.tolist())
 
 
 # Mapping hydro plants behind a reservoir
@@ -253,11 +258,11 @@ minflowcost = 500
 slopes = pd.DataFrame( columns = ['week','reservoir','iter','value'])
 intercepts = pd.DataFrame( columns = ['week','iter','value'])
 
-scenario = scenario[0:100]
+
+#week = list([1])
+scenario = scenario[0:10]
 for s in scenario:
 
-    endstorage = reservoir_initial
-    storedstartstorage = dict()
     tick = time.time()
     
     """ FORWARD SOLVE """
@@ -266,7 +271,6 @@ for s in scenario:
     inflow = inflow.set_index(['week','lake'])
     inflow = dict(inflow['inflow'])
     
-    startstorage = reservoir_initial
     slope = slopes.set_index(['week','reservoir','iter'])
     slope = dict(slope['value'])
     
@@ -294,7 +298,7 @@ for s in scenario:
 
     ub = [ maxspill[g] if g in maxspill else grb.GRB.INFINITY 
            for w in week for b in block for g in generatorhydro]
-    SPILLEDH2OFLOW = m.addVars(block, generatorhydro, ub = ub, name ='spilledH20flow')
+    SPILLEDH2OFLOW = m.addVars(week, block, generatorhydro, ub = ub, name ='spilledH20flow')
 
     FUTURECOST = m.addVars(week, name = 'futurecost')
 
@@ -308,7 +312,8 @@ for s in scenario:
     ENDSTORAGE = m.addVars(week, reservoir, ub = ub, name='endstorage')
     STARTSTORAGE = m.addVars(week, reservoir, ub = ub, name='startstorage')
     
-    ENDSTORAGE_GWH = m.addVars(h2osegment, name='endstorage_gwh')
+    ub = endh2ovalue['gwh']
+    ENDSTORAGE_GWH = m.addVars(h2osegment, ub = ub, name='endstorage_gwh')
     # Create variables end ####################################################
     
     
@@ -325,339 +330,130 @@ for s in scenario:
           + grb.quicksum( ARCFLOWSURPLUS[w,b,i,j] * minflowcost * blkhour[w,b]
                           for b in block for (i,j) in minflowarc)
           + FUTURECOST[w]
-          ,index = w, priority = week[-1]-w
+          ,index = w, priority = week[-w]
         )
     # Create  multiple objective function end #################################
 
 
     # Create constraints ##################################################
-        
-    # Future cost constraints
-    if w < week[-1]:
-            m.addConstrs(
-                ( FUTURECOST >= intercept[i]
-                              + grb.quicksum( ENDSTORAGE[r] * slope[r,i]
-                                              for r in reservoir )
-                 for i in iteration
-                ),  name = "futurecost")
-
-        # Supply demand balance constrant
-        m.addConstrs(
-            (   grb.quicksum( GENERATION[b,g]
-                              for g,n in generatornode.select('*',n))
-              + grb.quicksum( POWERFLOW[b,fr,n]
-                              for fr,n in tx.select('*',n))
-              - grb.quicksum( POWERFLOW[b,n,to]
-                              for n,to in tx.select(n,'*'))
-              + grb.quicksum( SHORTAGE[b,n,ls]
-                              for ls in vollsegment)
-            ==  
-                netdemand[w,b,n]
-                for b in block 
-                for n in node
-            ),  name = 'supplydemandbalance')
-
-        # Hydro generation conversion
-        m.addConstrs(
-            (   GENERATION[b,g] 
-            == 
-                TURBINEH2OFLOW[b,g] * powerfactor[g]
-                for b in block 
-                for g in generatorhydro
-            ),  name = 'hydrogenerationconversion')
-
-
-        # Maximum hydro flow constraint
-        m.addConstrs(
-            (   ARCFLOW[b,i,j] - ARCFLOWDEFICIT[b,i,j]
-            <=  
-                maxflow[i,j]
-                for b in block 
-                for (i,j) in maxflowarc
-            ),  name = 'maxhydroflow')
-
-        # Minimum hydro flow constraint
-        m.addConstrs(
-            (   ARCFLOW[b,i,j] + ARCFLOWSURPLUS[b,i,j]
-            >=  
-                minflow[i,j]
-                for b in block 
-                for (i,j) in minflowarc
-            ),  name = 'minhydroflow')
-
-        # Hydro junction conservation constraint
-        m.addConstrs(
-            (   grb.quicksum( ARCFLOW.sum(b,j,'*') * blkhour[w,b] * 3600
-                            + grb.quicksum( TURBINEH2OFLOW[b,g1] 
-                                            * blkhour[w,b] * 3600
-                                          + SPILLEDH2OFLOW[b,g1] 
-                                            * blkhour[w,b] * 3600
-                                            for g1 in generatorhydro
-                                            if (g1,j) in hydroplantfr )
-                              for b in block )
-              - grb.quicksum( ARCFLOW.sum(b,'*',j) * blkhour[w,b] * 3600
-                            + grb.quicksum( TURBINEH2OFLOW[b,g2] 
-                                            * blkhour[w,b] * 3600
-                                          + SPILLEDH2OFLOW[b,g2] 
-                                            * blkhour[w,b] * 3600
-                                            for g2 in generatorhydro
-                                            if (g2,j) in hydroplantto )
-                              for b in block )
-            ==
-                grb.quicksum( inflow[j] * blkhour[w,b] * 3600
-                              for b in block 
-                              if j in inflow )
-
-                for j in junction 
-                if j <> 'SEA' and j not in reservoir
-
-            ),  name = 'hydrojunctionconservation')
-        
-         # Hydro reservoir conservation constraint
-        m.addConstrs(
-            (   grb.quicksum( ARCFLOW.sum(b,r,'*') * blkhour[w,b] * 3600
-                            + grb.quicksum( TURBINEH2OFLOW[b,g1] 
-                                            * blkhour[w,b] * 3600
-                                          + SPILLEDH2OFLOW[b,g1] 
-                                            * blkhour[w,b] * 3600
-                                            for g1 in generatorhydro
-                                            if (g1,r) in hydroplantfr )
-                              for b in block )
-              - grb.quicksum( ARCFLOW.sum(b,'*',r) * blkhour[w,b] * 3600
-                            + grb.quicksum( TURBINEH2OFLOW[b,g2] 
-                                            * blkhour[w,b] * 3600
-                                          + SPILLEDH2OFLOW[b,g2] 
-                                            * blkhour[w,b] * 3600
-                                            for g2 in generatorhydro
-                                            if (g2,r) in hydroplantto )
-                              for b in block )
-              + ENDSTORAGE[r] 
-                              
-            ==
-                grb.quicksum( inflow[r] * blkhour[w,b] * 3600
-                              for b in block 
-                              if r in inflow )
-              + startstorage[r] 
-                
-                for r in reservoir 
-            ),  name = 'hydroreservoirservation')
-
-
-
-        # Calculate end storage in GWh for last week
-        if w == week[-1]:
-            m.addConstr(
-                (   grb.quicksum( ENDSTORAGE_GWH[vs]
-                                  for vs in h2osegment)
-                ==
-                    grb.quicksum( ENDSTORAGE[r] 
-                                  * reservoirfactor[r] / 3.6e6
-                                  for r in reservoir)
-                ),  name = 'endstoragegwh')
-
-        # Create constraints end ##############################################
     
 
+    # Calculate end storage in GWh for last week of the study period
+    m.addConstr(
+        ( grb.quicksum( ENDSTORAGE_GWH[vs] for vs in h2osegment )
+        ==
+          grb.quicksum( ENDSTORAGE[w,r] * reservoirfactor[r] / 3.6e6
+                        for w in week if w == week[-1] for r in reservoir )
+        ),  name = 'endstoragegwh')
+    
+    # Future cost constraints
+    m.addConstrs(
+        ( FUTURECOST[w] >= intercept[w,i] + 
+          grb.quicksum( ENDSTORAGE[r] * slope[r,i] for r in reservoir )
+          for w in week if w < week[-1] for i in iteration 
+        ), name = "futurecost")        
 
-
-
-
-
-
-
-
-
-        for r in reservoir:
-            storedstartstorage.update({(w,r): endstorage[r]})
-
-
-
-       
-            
-            
-
-        # Create objective function ###########################################
-        if w < week[-1]:
-            m.setObjective(
-                  grb.quicksum( GENERATION[b,g]
-                                * srmc[w,g] * blkhour[w,b]
-                                for b in block 
-                                for g in generatorthermal )
-                + grb.quicksum( SHORTAGE[b,n,ls] 
-                                * shortagecost[n,ls] * blkhour[w,b] 
-                                for b in block 
-                                for n in node 
-                                for ls in vollsegment )
-                + grb.quicksum( ARCFLOWDEFICIT[b,i,j]
-                                * maxflowcost * blkhour[w,b]
-                                for b in block 
-                                for (i,j) in maxflowarc )
-                + grb.quicksum( ARCFLOWSURPLUS[b,i,j] 
-                                * minflowcost * blkhour[w,b]
-                                for b in block 
-                                for (i,j) in minflowarc)
-                + FUTURECOST
-            )
-
-        if w == week[-1]:
-            m.setObjective(
-              grb.quicksum( GENERATION[b,g] 
-                            * srmc[w,g] * blkhour[w,b]
-                            for b in block 
-                            for g in generatorthermal )
-            + grb.quicksum( SHORTAGE[b,n,ls]
-                            * shortagecost[n,ls] * blkhour[w,b] 
-                            for b in block 
-                            for n in node 
-                            for ls in vollsegment )
-            + grb.quicksum( ARCFLOWDEFICIT[b,i,j] 
-                            * maxflowcost * blkhour[w,b]
-                            for b in block 
-                            for (i,j) in maxflowarc )
-            + grb.quicksum( ARCFLOWSURPLUS[b,i,j] 
-                            * minflowcost * blkhour[w,b]
-                            for b in block 
-                            for (i,j) in minflowarc)
-            - grb.quicksum( ENDSTORAGE_GWH[vs] 
-                            * h2odlrpermwh[vs] * 1e3
-                            for vs in h2osegment )
-            )
-        # Create objective function end #######################################
-            
-            
+    m.addConstrs(
+        ( FUTURECOST[w] >= 
+          grb.quicksum( h2osegmentgwh[vs] * h2odlrpermwh[vs] * 1e3 
+                      - ENDSTORAGE_GWH[vs] * h2odlrpermwh[vs] * 1e3
+                        for vs in h2osegment )
+          for w in week if w == week[-1] 
+        ), name = "futurecost")
         
-        # Create constraints ##################################################
+    # Supply demand balance constrant
+    m.addConstrs(
+        ( grb.quicksum( GENERATION[w,b,g] for g,n in gen_node.select('*',n) )
+        + grb.quicksum( POWERFLOW[w,b,fr,n] for fr,n in tx.select('*',n) )
+        - grb.quicksum( POWERFLOW[w,b,n,to] for n,to in tx.select(n,'*'))
+        + grb.quicksum( SHORTAGE[w,b,n,ls] for ls in vollsegment)
+        == netdemand[w,b,n]
+          for w in week for b in block for n in node
+        ),  name = 'supplydemandbalance')
+
+    # Hydro generation conversion
+    m.addConstrs(
+        ( GENERATION[w,b,g] == TURBINEH2OFLOW[w,b,g] * powerfactor[g]
+          for w in week for b in block for g in generatorhydro
+        ),  name = 'hydrogenerationconversion')    
+    
+    # Maximum hydro flow constraint
+    m.addConstrs(
+        ( ARCFLOW[w,b,i,j] - ARCFLOWDEFICIT[w,b,i,j] <=  maxflow[i,j]
+          for w in week for b in block for (i,j) in maxflowarc
+        ),  name = 'maxhydroflow')
+    
+    # Minimum hydro flow constraint
+    m.addConstrs(
+        ( ARCFLOW[w,b,i,j] + ARCFLOWSURPLUS[w,b,i,j] >=  minflow[i,j]
+          for w in week for b in block for (i,j) in minflowarc
+        ),  name = 'minhydroflow')
+
+    # Hydro junction conservation constraint
+    m.addConstrs(
+        ( grb.quicksum( ARCFLOW.sum(w,b,j,'*') * blkhour[w,b] * 3600
+                      + grb.quicksum( TURBINEH2OFLOW[w,b,g1] * blkhour[w,b] 
+                                    + SPILLEDH2OFLOW[w,b,g1] * blkhour[w,b]
+                                      for g1 in generatorhydro
+                                      if (g1,j) in hydroplantfr ) * 3600
+                        for b in block )
+        - grb.quicksum( ARCFLOW.sum(w,b,'*',j) * blkhour[w,b] * 3600
+                      + grb.quicksum( TURBINEH2OFLOW[w,b,g2] * blkhour[w,b]
+                                    + SPILLEDH2OFLOW[w,b,g2] * blkhour[w,b]
+                                      for g2 in generatorhydro
+                                      if (g2,j) in hydroplantto ) * 3600
+                        for b in block )
+        ==
+          grb.quicksum( inflow[w,j] * blkhour[w,b] * 3600
+                        for b in block if j in inflow )
+
+          for w in week for j in junction if j <> 'SEA' and j not in reservoir
+        ),  name = 'hydrojunctionconservation')
         
-        # Future cost constraints
-        if w < week[-1]:
-            m.addConstrs(
-                ( FUTURECOST >= intercept[i]
-                              + grb.quicksum( ENDSTORAGE[r] * slope[r,i]
-                                              for r in reservoir )
-                 for i in iteration
-                ),  name = "futurecost")
-
-        # Supply demand balance constrant
-        m.addConstrs(
-            (   grb.quicksum( GENERATION[b,g]
-                              for g,n in generatornode.select('*',n))
-              + grb.quicksum( POWERFLOW[b,fr,n]
-                              for fr,n in tx.select('*',n))
-              - grb.quicksum( POWERFLOW[b,n,to]
-                              for n,to in tx.select(n,'*'))
-              + grb.quicksum( SHORTAGE[b,n,ls]
-                              for ls in vollsegment)
-            ==  
-                netdemand[w,b,n]
-                for b in block 
-                for n in node
-            ),  name = 'supplydemandbalance')
-
-        # Hydro generation conversion
-        m.addConstrs(
-            (   GENERATION[b,g] 
-            == 
-                TURBINEH2OFLOW[b,g] * powerfactor[g]
-                for b in block 
-                for g in generatorhydro
-            ),  name = 'hydrogenerationconversion')
-
-
-        # Maximum hydro flow constraint
-        m.addConstrs(
-            (   ARCFLOW[b,i,j] - ARCFLOWDEFICIT[b,i,j]
-            <=  
-                maxflow[i,j]
-                for b in block 
-                for (i,j) in maxflowarc
-            ),  name = 'maxhydroflow')
-
-        # Minimum hydro flow constraint
-        m.addConstrs(
-            (   ARCFLOW[b,i,j] + ARCFLOWSURPLUS[b,i,j]
-            >=  
-                minflow[i,j]
-                for b in block 
-                for (i,j) in minflowarc
-            ),  name = 'minhydroflow')
-
-        # Hydro junction conservation constraint
-        m.addConstrs(
-            (   grb.quicksum( ARCFLOW.sum(b,j,'*') * blkhour[w,b] * 3600
-                            + grb.quicksum( TURBINEH2OFLOW[b,g1] 
-                                            * blkhour[w,b] * 3600
-                                          + SPILLEDH2OFLOW[b,g1] 
-                                            * blkhour[w,b] * 3600
-                                            for g1 in generatorhydro
-                                            if (g1,j) in hydroplantfr )
-                              for b in block )
-              - grb.quicksum( ARCFLOW.sum(b,'*',j) * blkhour[w,b] * 3600
-                            + grb.quicksum( TURBINEH2OFLOW[b,g2] 
-                                            * blkhour[w,b] * 3600
-                                          + SPILLEDH2OFLOW[b,g2] 
-                                            * blkhour[w,b] * 3600
-                                            for g2 in generatorhydro
-                                            if (g2,j) in hydroplantto )
-                              for b in block )
-            ==
-                grb.quicksum( inflow[j] * blkhour[w,b] * 3600
-                              for b in block 
-                              if j in inflow )
-
-                for j in junction 
-                if j <> 'SEA' and j not in reservoir
-
-            ),  name = 'hydrojunctionconservation')
-        
-         # Hydro reservoir conservation constraint
-        m.addConstrs(
-            (   grb.quicksum( ARCFLOW.sum(b,r,'*') * blkhour[w,b] * 3600
-                            + grb.quicksum( TURBINEH2OFLOW[b,g1] 
-                                            * blkhour[w,b] * 3600
-                                          + SPILLEDH2OFLOW[b,g1] 
-                                            * blkhour[w,b] * 3600
-                                            for g1 in generatorhydro
-                                            if (g1,r) in hydroplantfr )
-                              for b in block )
-              - grb.quicksum( ARCFLOW.sum(b,'*',r) * blkhour[w,b] * 3600
-                            + grb.quicksum( TURBINEH2OFLOW[b,g2] 
-                                            * blkhour[w,b] * 3600
-                                          + SPILLEDH2OFLOW[b,g2] 
-                                            * blkhour[w,b] * 3600
-                                            for g2 in generatorhydro
-                                            if (g2,r) in hydroplantto )
-                              for b in block )
-              + ENDSTORAGE[r] 
-                              
-            ==
-                grb.quicksum( inflow[r] * blkhour[w,b] * 3600
-                              for b in block 
-                              if r in inflow )
-              + startstorage[r] 
+    # Hydro reservoir conservation constraint (to be continued)
+    m.addConstrs(
+        ( grb.quicksum( ARCFLOW.sum(w,b,r,'*') * blkhour[w,b] * 3600
+                      + grb.quicksum( TURBINEH2OFLOW[w,b,g1] * blkhour[w,b]
+                                    + SPILLEDH2OFLOW[w,b,g1] * blkhour[w,b]
+                                      for g1 in generatorhydro
+                                      if (g1,r) in hydroplantfr ) * 3600
+                        for b in block )
+        - grb.quicksum( ARCFLOW.sum(w,b,'*',r) * blkhour[w,b] * 3600
+                      + grb.quicksum( TURBINEH2OFLOW[w,b,g2] * blkhour[w,b]
+                                    + SPILLEDH2OFLOW[w,b,g2] * blkhour[w,b]
+                                      for g2 in generatorhydro
+                                      if (g2,r) in hydroplantto ) * 3600
+                        for b in block )
+        + ENDSTORAGE[w,r] 
+        ==
+          grb.quicksum( inflow[w,r] * blkhour[w,b] * 3600
+                        for b in block  if r in inflow )
+        + STARTSTORAGE[w,r] 
                 
-                for r in reservoir 
-            ),  name = 'hydroreservoirservation')
-
-
-
-        # Calculate end storage in GWh for last week
-        if w == week[-1]:
-            m.addConstr(
-                (   grb.quicksum( ENDSTORAGE_GWH[vs]
-                                  for vs in h2osegment)
-                ==
-                    grb.quicksum( ENDSTORAGE[r] 
-                                  * reservoirfactor[r] / 3.6e6
-                                  for r in reservoir)
-                ),  name = 'endstoragegwh')
-
-        # Create constraints end ##############################################
-
-
-        m.optimize()
-        #m.write('forward%s.lp' % (w))
-
-        endstorage = m.getAttr('X', ENDSTORAGE)
+          for w in week for r in reservoir 
+        ),  name = 'hydroreservoirservation')
+    
+        
+    # Calculate start storage (to be continued)
+    m.addConstrs(
+        ( STARTSTORAGE[1,r] == reservoir_initial[r]  
+          for r in reservoir 
+        ),  name = 'startstoragegwh')
+    
+    m.addConstrs(
+        ( STARTSTORAGE[w,r] 
+        == 
+          ENDSTORAGE[w-1,r] 
+          for r in reservoir 
+          for w in week if w > week[0]  
+        ),  name = 'startstoragegwh')    
+        
+    # Create constraints end ##############################################
+    m.update()
+    #m.write('forward%s.lp' %(s))
+    m.optimize()
+        
+    endstorage = m.getAttr('X', ENDSTORAGE)
 
     """ FORWARD SOLVE END """
     
@@ -819,7 +615,7 @@ for s in scenario:
         # Supply demand balance constrant
         m.addConstrs(
             (   grb.quicksum( GENERATION[b,g]
-                              for g,n in generatornode.select('*',n))
+                              for g,n in gen_node.select('*',n))
               + grb.quicksum( POWERFLOW[b,fr,n]
                               for fr,n in tx.select('*',n))
               - grb.quicksum( POWERFLOW[b,n,to]
